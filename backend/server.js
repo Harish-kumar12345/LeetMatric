@@ -75,7 +75,9 @@ async function leetcodeQuery(query, variables) {
 }
 
 // ── Routes ───────────────────────────────────────────────────────────────────
-
+app.get("/", (req, res) => {
+  res.send("🚀 Leetlytics Backend is Running");
+});
 // GET /api/user/:username  → stats + profile
 app.get("/api/user/:username", async (req, res) => {
   const { username } = req.params;

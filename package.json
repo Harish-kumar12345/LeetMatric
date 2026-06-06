@@ -1,0 +1,10 @@
+{
+  "name": "leetmatric",
+  "version": "1.0.0",
+  "description": "LeetCode stats tracker — full stack",
+  "scripts": {
+    "start": "cd backend && node server.js",
+    "dev":   "cd backend && npx nodemon server.js",
+    "install": "cd backend && npm install"
+  }
+}

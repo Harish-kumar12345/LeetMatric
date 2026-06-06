@@ -1,0 +1,324 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   LeetMatric — app.js
+   Talks to /api/* endpoints served by the Node backend.
+   ───────────────────────────────────────────────────────────────────────── */
+
+const API_BASE = ""; // same origin; backend serves frontend at /
+
+// ── DOM refs ────────────────────────────────────────────────────────────────
+const searchBtn   = document.getElementById("search-btn");
+const userInput   = document.getElementById("user-input");
+const results     = document.getElementById("results");
+const searchHint  = document.getElementById("search-hint");
+const btnText     = searchBtn.querySelector(".btn-text");
+const btnSpinner  = searchBtn.querySelector(".btn-spinner");
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const CIRC = 2 * Math.PI * 46; // SVG ring circumference (r=46)
+
+function validate(username) {
+  if (!username.trim()) return "Username cannot be empty.";
+  if (!/^[a-zA-Z0-9_-]{1,25}$/.test(username))
+    return "Use only letters, numbers, _ or − (max 25 chars).";
+  return null;
+}
+
+function setLoading(loading) {
+  searchBtn.disabled = loading;
+  btnText.hidden     = loading;
+  btnSpinner.hidden  = !loading;
+}
+
+function timeAgo(ts) {
+  const diff = Math.floor(Date.now() / 1000) - parseInt(ts);
+  if (diff < 60)  return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+  return `${Math.floor(diff/86400)}d ago`;
+}
+
+function pct(solved, total) {
+  return total > 0 ? ((solved / total) * 100).toFixed(1) : "0.0";
+}
+
+// ── Skeleton ─────────────────────────────────────────────────────────────────
+function showSkeleton() {
+  results.innerHTML = `
+    <div class="skeleton-section">
+      <div class="skel-row">
+        <div class="skel skel-circle" style="width:64px;height:64px;flex-shrink:0"></div>
+        <div style="flex:1">
+          <div class="skel skel-line" style="width:50%"></div>
+          <div class="skel skel-line" style="width:30%"></div>
+        </div>
+      </div>
+    </div>
+    <div class="skeleton-section">
+      <div class="skel skel-line" style="width:25%;margin-bottom:1.5rem"></div>
+      <div style="display:flex;justify-content:space-around;gap:1rem">
+        ${[1,2,3].map(()=>`<div class="skel skel-circle" style="width:108px;height:108px"></div>`).join("")}
+      </div>
+    </div>
+    <div class="skeleton-section">
+      <div class="skel skel-line" style="width:25%;margin-bottom:1.25rem"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+        ${[1,2,3,4].map(()=>`
+          <div style="background:var(--surface2);border-radius:var(--radius);padding:1rem">
+            <div class="skel skel-line" style="width:60%"></div>
+            <div class="skel skel-line" style="width:40%;height:22px"></div>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+// ── SVG Ring helper ───────────────────────────────────────────────────────────
+function ringHTML(difficulty, id) {
+  return `
+    <div class="ring-item">
+      <div class="ring-wrap">
+        <svg class="ring-svg" viewBox="0 0 110 110">
+          <circle class="ring-bg" cx="55" cy="55" r="46"/>
+          <circle id="${id}" class="ring-fg ${difficulty}" cx="55" cy="55" r="46"/>
+        </svg>
+        <div class="ring-label">
+          <span class="ring-count" id="${id}-count">—</span>
+          <span class="ring-sub">solved</span>
+        </div>
+      </div>
+      <span class="ring-tag ${difficulty}">${difficulty}</span>
+    </div>`;
+}
+
+function animateRing(id, solved, total) {
+  const circle = document.getElementById(id);
+  const countEl = document.getElementById(`${id}-count`);
+  if (!circle) return;
+  circle.style.strokeDasharray  = CIRC;
+  circle.style.strokeDashoffset = CIRC;
+  countEl.textContent = `${solved}/${total}`;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    circle.style.strokeDashoffset = CIRC * (1 - (total > 0 ? solved/total : 0));
+  }));
+}
+
+// ── Build heatmap from LeetCode's submissionCalendar JSON ────────────────────
+function buildHeatmap(calendarStr) {
+  const calData = JSON.parse(calendarStr || "{}");
+  const today   = new Date();
+  today.setHours(0,0,0,0);
+  const weeks = 26; // ~6 months
+  const cells  = [];
+  // Generate last 26 weeks of days
+  const startDate = new Date(today);
+  startDate.setDate(startDate.getDate() - (weeks * 7 - 1));
+  // pad to Monday
+  const dayOfWeek = startDate.getDay(); // 0=Sun
+  startDate.setDate(startDate.getDate() - dayOfWeek);
+
+  let cols = [];
+  let col  = [];
+  const cur = new Date(startDate);
+  while (cur <= today) {
+    const ts  = Math.floor(cur.getTime() / 1000);
+    const cnt = calData[ts] || 0;
+    const lvl = cnt === 0 ? 0 : cnt < 3 ? 1 : cnt < 6 ? 2 : cnt < 10 ? 3 : 4;
+    const dateStr = cur.toISOString().slice(0,10);
+    col.push({ lvl, cnt, dateStr });
+    if (col.length === 7) { cols.push(col); col = []; }
+    cur.setDate(cur.getDate() + 1);
+  }
+  if (col.length) cols.push(col);
+
+  return `
+    <div class="heatmap">
+      ${cols.map(week => `
+        <div class="heatmap-col">
+          ${week.map(d => `
+            <div class="heatmap-cell lvl-${d.lvl}" title="${d.cnt} submission${d.cnt !== 1 ? "s" : ""} on ${d.dateStr}"></div>
+          `).join("")}
+        </div>
+      `).join("")}
+    </div>`;
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function render(userData, calData, recentData, username) {
+  const aq = userData.allQuestionsCount;
+  const ac = userData.matchedUser.submitStats.acSubmissionNum;
+  const ts = userData.matchedUser.submitStats.totalSubmissionNum;
+  const profile = userData.matchedUser.profile;
+
+  const totals  = { easy: aq[1].count, medium: aq[2].count, hard: aq[3].count };
+  const solved  = { easy: ac[1].count, medium: ac[2].count, hard: ac[3].count };
+  const subs    = { all: ts[0].submissions, easy: ts[1].submissions, medium: ts[2].submissions, hard: ts[3].submissions };
+
+  // Profile
+  const avatarHTML = profile.userAvatar
+    ? `<img class="profile-avatar" src="${profile.userAvatar}" alt="${username}" loading="lazy" onerror="this.replaceWith(document.createElement('div'))">`
+    : `<div class="profile-avatar-placeholder">👤</div>`;
+
+  // Heatmap
+  const heatmapHTML = calData?.submissionCalendar
+    ? buildHeatmap(calData.submissionCalendar)
+    : `<div class="empty-state" style="padding:1rem">No calendar data.</div>`;
+
+  // Recent submissions
+  const recentHTML = (recentData?.length)
+    ? recentData.map(s => {
+        const ac = s.statusDisplay === "Accepted";
+        return `
+          <div class="recent-item">
+            <div class="recent-status ${ac ? "ac" : "rej"}"></div>
+            <div class="recent-title">
+              <a href="https://leetcode.com/problems/${s.titleSlug}" target="_blank" rel="noopener">${s.title}</a>
+            </div>
+            <span class="recent-lang">${s.lang}</span>
+            <span class="recent-time">${timeAgo(s.timestamp)}</span>
+          </div>`;
+      }).join("")
+    : `<div class="empty-state" style="padding:1rem">No recent submissions.</div>`;
+
+  results.innerHTML = `
+    <!-- Profile -->
+    <div class="profile-card">
+      ${avatarHTML}
+      <div class="profile-info">
+        <div class="profile-name">${profile.realName || username}</div>
+        <div class="profile-username">@${username}</div>
+        <div class="profile-rank">
+          <span>Global Rank</span>
+          <span class="rank-badge">#${profile.ranking?.toLocaleString() || "—"}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Solved Rings -->
+    <div class="solved-section">
+      <div class="section-title">// problems solved</div>
+      <div class="rings-row">
+        ${ringHTML("easy",   "ring-easy")}
+        ${ringHTML("medium", "ring-medium")}
+        ${ringHTML("hard",   "ring-hard")}
+      </div>
+    </div>
+
+    <!-- Submission Stats -->
+    <div class="stats-section">
+      <div class="section-title">// submission stats</div>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Total Submissions</div>
+          <div class="stat-value all">${subs.all.toLocaleString()}</div>
+          <div class="stat-sub">${solved.easy + solved.medium + solved.hard} problems solved</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Easy Submissions</div>
+          <div class="stat-value easy">${subs.easy.toLocaleString()}</div>
+          <div class="stat-sub">${pct(solved.easy, totals.easy)}% acceptance</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Medium Submissions</div>
+          <div class="stat-value medium">${subs.medium.toLocaleString()}</div>
+          <div class="stat-sub">${pct(solved.medium, totals.medium)}% acceptance</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Hard Submissions</div>
+          <div class="stat-value hard">${subs.hard.toLocaleString()}</div>
+          <div class="stat-sub">${pct(solved.hard, totals.hard)}% acceptance</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Streak & Heatmap -->
+    <div class="streak-section">
+      <div class="section-title">// activity</div>
+      <div class="streak-row">
+        <div class="streak-pill">
+          <div class="streak-icon">🔥</div>
+          <div class="streak-info">
+            <div class="streak-num">${calData?.streak ?? "—"}</div>
+            <div class="streak-lbl">Day Streak</div>
+          </div>
+        </div>
+        <div class="streak-pill">
+          <div class="streak-icon">📅</div>
+          <div class="streak-info">
+            <div class="streak-num">${calData?.totalActiveDays ?? "—"}</div>
+            <div class="streak-lbl">Active Days</div>
+          </div>
+        </div>
+      </div>
+      <div class="heatmap-wrap">${heatmapHTML}</div>
+    </div>
+
+    <!-- Recent Submissions -->
+    <div class="recent-section">
+      <div class="section-title">// recent submissions</div>
+      <div class="recent-list">${recentHTML}</div>
+    </div>
+  `;
+
+  // Animate rings after render
+  animateRing("ring-easy",   solved.easy,   totals.easy);
+  animateRing("ring-medium", solved.medium, totals.medium);
+  animateRing("ring-hard",   solved.hard,   totals.hard);
+}
+
+// ── Fetch pipeline ─────────────────────────────────────────────────────────
+async function fetchAll(username) {
+  showSkeleton();
+  try {
+    const [userRes, calRes, recentRes] = await Promise.allSettled([
+      fetch(`${API_BASE}/api/user/${username}`),
+      fetch(`${API_BASE}/api/user/${username}/calendar`),
+      fetch(`${API_BASE}/api/user/${username}/recent`),
+    ]);
+
+    // Main user data is required
+    if (userRes.status === "rejected" || !userRes.value.ok) {
+      const msg = userRes.status === "rejected"
+        ? "Server unreachable. Is the backend running?"
+        : await userRes.value.json().then(d => d.error).catch(() => "Unknown error");
+      throw new Error(msg);
+    }
+
+    const userData   = await userRes.value.json();
+    const calData    = calRes.status === "fulfilled" && calRes.value.ok
+      ? await calRes.value.json() : null;
+    const recentData = recentRes.status === "fulfilled" && recentRes.value.ok
+      ? await recentRes.value.json() : [];
+
+    render(userData, calData, recentData, username);
+  } catch (err) {
+    results.innerHTML = `
+      <div class="empty-state">
+        <div class="icon">⚠️</div>
+        <div class="err-msg">${err.message}</div>
+        <div>Check the username and try again.</div>
+      </div>`;
+  }
+}
+
+// ── Events ───────────────────────────────────────────────────────────────────
+let debounceTimer;
+
+async function handleSearch() {
+  const username = userInput.value.trim();
+  const err = validate(username);
+  if (err) { searchHint.textContent = err; return; }
+  searchHint.textContent = "";
+  setLoading(true);
+  await fetchAll(username);
+  setLoading(false);
+}
+
+searchBtn.addEventListener("click", handleSearch);
+userInput.addEventListener("keydown", e => {
+  if (e.key === "Enter") handleSearch();
+});
+userInput.addEventListener("input", () => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => { searchHint.textContent = ""; }, 300);
+});
